@@ -1,4 +1,4 @@
-const DEFAULT_MODEL = "deepseek-chat";
+const DEFAULT_MODEL = "deepseek/deepseek-v4-flash"; // Модель Vercel AI Gateway
 const MAX_HISTORY_MESSAGES = 8;
 const MAX_HISTORY_MESSAGE_CHARS = 1200;
 const MAX_ALICE_TEXT = 1024;
@@ -110,15 +110,15 @@ async function searchWeb(query, timeoutMs) {
   }
 }
 
-async function askDeepSeek(text, history, searchContext, timeoutMs) {
-  const key = process.env.DEEPSEEK_API_KEY;
-  if (!key) throw new Error("MISSING_DEEPSEEK_KEY");
+async function askGateway(text, history, searchContext, timeoutMs) {
+  const key = process.env.AI_GATEWAY_API_KEY; // <-- Новая переменная
+  if (!key) throw new Error("MISSING_AI_GATEWAY_KEY");
   if (timeoutMs < 250) throw new Error("TIME_BUDGET_EXHAUSTED");
 
-  const model = String(process.env.DEEPSEEK_MODEL || DEFAULT_MODEL).trim();
-  if (!/^[A-Za-z0-9._-]+$/.test(model)) throw new Error("INVALID_MODEL_NAME");
+  const model = String(process.env.AI_GATEWAY_MODEL || DEFAULT_MODEL).trim();
+  if (!/^[A-Za-z0-9._/-]+$/.test(model)) throw new Error("INVALID_MODEL_NAME");
 
-  // DeepSeek использует формат OpenAI: system + user/assistant
+  // Vercel AI Gateway использует формат OpenAI Chat Completions
   const messages = [
     { role: "system", content: SYSTEM_PROMPT },
     ...safeHistory(history).map(item => ({
@@ -133,12 +133,12 @@ async function askDeepSeek(text, history, searchContext, timeoutMs) {
   messages.push({ role: "user", content: prompt });
 
   const { response, data } = await fetchJson(
-    "https://api.deepseek.com/chat/completions",
+    "https://ai-gateway.vercel.sh/v1/chat/completions", // <-- Новый URL
     {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "Authorization": `Bearer ${key}`
+        "Authorization": `Bearer ${key}` // <-- Авторизация Bearer
       },
       body: JSON.stringify({
         model,
@@ -153,31 +153,31 @@ async function askDeepSeek(text, history, searchContext, timeoutMs) {
 
   if (!response.ok) {
     const status = Number(response.status);
-    console.error("DeepSeek request failed with HTTP", status);
-    if (status === 401 || status === 403) throw new Error("DEEPSEEK_KEY_REJECTED");
-    if (status === 402) throw new Error("DEEPSEEK_INSUFFICIENT_BALANCE");
-    if (status === 429) throw new Error("DEEPSEEK_QUOTA");
-    throw new Error("DEEPSEEK_REQUEST_FAILED");
+    console.error("AI Gateway request failed with HTTP", status);
+    if (status === 401 || status === 403) throw new Error("AI_GATEWAY_KEY_REJECTED");
+    if (status === 402) throw new Error("AI_GATEWAY_INSUFFICIENT_CREDITS");
+    if (status === 429) throw new Error("AI_GATEWAY_RATE_LIMIT");
+    throw new Error("AI_GATEWAY_REQUEST_FAILED");
   }
 
   const answer = String(data?.choices?.[0]?.message?.content || "").trim();
-  if (!answer) throw new Error("DEEPSEEK_EMPTY_RESPONSE");
+  if (!answer) throw new Error("AI_GATEWAY_EMPTY_RESPONSE");
   if (data?.choices?.[0]?.finish_reason === "length") {
-    console.warn("DeepSeek reached the output token limit.");
+    console.warn("AI Gateway reached the output token limit.");
   }
   return answer;
 }
 
 function errorForUser(error) {
   switch (error?.message) {
-    case "MISSING_DEEPSEEK_KEY":
-      return "Сервер пока не настроен. Проверьте переменную DEEPSEEK_API_KEY в настройках Vercel.";
-    case "DEEPSEEK_KEY_REJECTED":
+    case "MISSING_AI_GATEWAY_KEY":
+      return "Сервер пока не настроен. Проверьте переменную AI_GATEWAY_API_KEY в настройках Vercel.";
+    case "AI_GATEWAY_KEY_REJECTED":
       return "Не удалось подключиться к нейросети. Проверьте API-ключ в настройках Vercel.";
-    case "DEEPSEEK_INSUFFICIENT_BALANCE":
-      return "На счёте нейросети закончились средства. Пополните баланс или попробуйте позже.";
-    case "DEEPSEEK_QUOTA":
-      return "Сейчас превышен лимит запросов. Попробуйте немного позже.";
+    case "AI_GATEWAY_INSUFFICIENT_CREDITS":
+      return "На счёте AI Gateway закончились кредиты. Пополните баланс или попробуйте позже.";
+    case "AI_GATEWAY_RATE_LIMIT":
+      return "Сейчас слишком много запросов. Попробуйте немного позже.";
     case "TIME_BUDGET_EXHAUSTED":
     case "AbortError":
       return "Не успела подготовить ответ. Попробуйте задать вопрос ещё раз, чуть короче.";
@@ -190,7 +190,7 @@ export default async function handler(req, res) {
   if (req.method === "GET") {
     return res.status(200).json({
       ok: true,
-      service: "alice-deepseek-serper",
+      service: "alice-vercel-ai-gateway-serper",
       message: "Webhook is ready. Yandex Dialogs should send POST requests to /api."
     });
   }
@@ -220,7 +220,7 @@ export default async function handler(req, res) {
       searchContext = await searchWeb(text, Math.min(SERPER_TIMEOUT_MS, Math.max(0, remainingMs() - 2600)));
     }
 
-    const answer = await askDeepSeek(
+    const answer = await askGateway(
       text,
       oldHistory,
       searchContext,
